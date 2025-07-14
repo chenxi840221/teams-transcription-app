@@ -1,0 +1,51 @@
+﻿# Build directories
+build/
+output/
+*.user
+*.suo
+*.sdf
+*.opensdf
+
+# Visual Studio
+.vs/
+*.vcxproj.user
+*.vcxproj.filters
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+
+# Compiled files
+*.exe
+*.dll
+*.lib
+*.obj
+*.pdb
+*.ilk
+*.exp
+
+# Data directories
+data/recordings/*
+data/transcripts/*
+data/exports/*
+!data/recordings/.gitkeep
+!data/transcripts/.gitkeep
+!data/exports/.gitkeep
+
+# Config with secrets
+config/settings.json
+
+# Logs
+*.log
+debug.log
+
+# Temporary files
+*.tmp
+*.temp
+~*
+
+# Windows
+Thumbs.db
+Desktop.ini

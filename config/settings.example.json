@@ -1,0 +1,26 @@
+﻿{
+  "recording": {
+    "autoStart": false,
+    "outputFormat": "wav",
+    "outputDirectory": "./data/recordings",
+    "audioQuality": 16000
+  },
+  "speechRecognition": {
+    "provider": "azure",
+    "apiKey": "YOUR_API_KEY_HERE",
+    "region": "eastus",
+    "language": "en-US",
+    "enablePunctuation": true,
+    "enableSpeakerDiarization": true
+  },
+  "ui": {
+    "minimizeToTray": true,
+    "showNotifications": true,
+    "theme": "system"
+  },
+  "privacy": {
+    "requireConsent": true,
+    "dataRetentionDays": 30,
+    "enableEncryption": true
+  }
+}
