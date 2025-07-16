@@ -12,6 +12,7 @@ public:
         Azure,
         Google,
         OpenAI,
+        AzureOpenAI,  // Azure OpenAI (GPT-4o)
         Amazon,
         Windows
     };
@@ -21,11 +22,16 @@ public:
         std::string apiKey;
         std::string region;
         std::string language;
+        std::string endpoint;  // Custom endpoint URL for Azure OpenAI
+        std::string deployment; // Deployment name for Azure OpenAI
         bool enablePunctuation;
         bool enableSpeakerDiarization;
     };
 
     using TranscriptionCallback = std::function<void(const std::string& text, double confidence)>;
+    
+    // Forward declaration
+    class ISpeechProvider;
 
     SpeechRecognition();
     ~SpeechRecognition();
@@ -39,8 +45,6 @@ private:
     bool initialized;
     SpeechConfig currentConfig;
     TranscriptionCallback transcriptionCallback;
-
-    class ISpeechProvider;
     std::unique_ptr<ISpeechProvider> speechProvider;
 
     bool InitializeProvider();

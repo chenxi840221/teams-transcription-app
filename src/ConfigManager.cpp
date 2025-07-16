@@ -20,7 +20,22 @@ bool ConfigManager::LoadConfig(const std::string& configPath) {
     try {
         if (!std::filesystem::exists(path)) {
             std::cerr << "Config file not found: " << path << std::endl;
-            return false;
+            std::cerr << "Creating default config file..." << std::endl;
+            
+            // Create directory if it doesn't exist
+            std::filesystem::path configDir = std::filesystem::path(path).parent_path();
+            if (!configDir.empty()) {
+                std::filesystem::create_directories(configDir);
+            }
+            
+            // Create default config file
+            if (SaveConfig(path)) {
+                std::cerr << "Default config created successfully" << std::endl;
+                // Now try to load it
+            } else {
+                std::cerr << "Failed to create default config" << std::endl;
+                return false;
+            }
         }
 
         std::ifstream file(path);
@@ -134,6 +149,8 @@ bool ConfigManager::ParseJsonConfig(const std::string& jsonContent) {
                     config.speechConfig.provider = SpeechRecognition::Provider::Google;
                 } else if (provider == "openai") {
                     config.speechConfig.provider = SpeechRecognition::Provider::OpenAI;
+                } else if (provider == "azure-openai") {
+                    config.speechConfig.provider = SpeechRecognition::Provider::AzureOpenAI;
                 } else if (provider == "amazon") {
                     config.speechConfig.provider = SpeechRecognition::Provider::Amazon;
                 } else if (provider == "windows") {
@@ -148,6 +165,12 @@ bool ConfigManager::ParseJsonConfig(const std::string& jsonContent) {
             }
             if (speech.contains("language")) {
                 config.speechConfig.language = speech["language"].get<std::string>();
+            }
+            if (speech.contains("endpoint")) {
+                config.speechConfig.endpoint = speech["endpoint"].get<std::string>();
+            }
+            if (speech.contains("deployment")) {
+                config.speechConfig.deployment = speech["deployment"].get<std::string>();
             }
             if (speech.contains("enablePunctuation")) {
                 config.speechConfig.enablePunctuation = speech["enablePunctuation"].get<bool>();

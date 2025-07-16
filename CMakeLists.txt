@@ -16,11 +16,13 @@ if(WIN32)
     set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} /SUBSYSTEM:WINDOWS")
 endif()
 
+# Find packages
+find_package(nlohmann_json CONFIG REQUIRED)
+
 # Include directories
 include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CMAKE_CURRENT_SOURCE_DIR}/include
-    ${CMAKE_CURRENT_SOURCE_DIR}/libs/json/include
     ${CMAKE_CURRENT_SOURCE_DIR}/libs/httplib
 )
 
@@ -40,9 +42,10 @@ endif()
 # Create executable
 add_executable(${PROJECT_NAME} WIN32 ${SOURCES} ${HEADERS} ${RESOURCES})
 
-# Windows-specific libraries
+# Link libraries
 if(WIN32)
-    target_link_libraries(${PROJECT_NAME}
+    target_link_libraries(${PROJECT_NAME} PRIVATE
+        nlohmann_json::nlohmann_json
         kernel32 user32 gdi32 winspool comdlg32 advapi32 shell32
         ole32 oleaut32 uuid odbc32 odbccp32 winmm mmdevapi
         comctl32 shlwapi

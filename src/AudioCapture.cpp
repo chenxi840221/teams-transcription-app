@@ -1,4 +1,5 @@
 #include "AudioCapture.h"
+#include "SimpleLogger.h"
 #include <iostream>
 #include <chrono>
 
@@ -122,16 +123,21 @@ void AudioCapture::ConvertWaveFormatToAudioFormat(const WAVEFORMATEX* wfx, Audio
 }
 
 HRESULT AudioCapture::StartCapture() {
+    INFO_LOG("AudioCapture::StartCapture called");
+    
     if (isCapturing.load()) {
+        INFO_LOG("AudioCapture already running, returning S_OK");
         return S_OK;  // Already capturing
     }
 
     if (!audioClient || !captureClient) {
+        ERROR_LOG("AudioCapture::StartCapture failed - audioClient or captureClient is null");
         return E_FAIL;
     }
 
     HRESULT hr = audioClient->Start();
     if (FAILED(hr)) {
+        ERROR_LOG("Failed to start audio client: 0x" + std::to_string(hr));
         std::cerr << "Failed to start audio client: 0x" << std::hex << hr << std::endl;
         return hr;
     }
@@ -139,6 +145,7 @@ HRESULT AudioCapture::StartCapture() {
     isCapturing.store(true);
     captureThread = std::thread(&AudioCapture::CaptureThreadProc, this);
 
+    INFO_LOG("Audio capture started successfully");
     std::cout << "Audio capture started" << std::endl;
     return S_OK;
 }
@@ -226,6 +233,10 @@ void AudioCapture::CaptureThreadProc() {
 
 void AudioCapture::ProcessAudioData(BYTE* audioData, UINT32 numFrames, DWORD flags) {
     if (!audioData || numFrames == 0) {
+        static int emptyCount = 0;
+        if (++emptyCount <= 10) { // Only log first 10 empty calls
+            WARN_LOG("AudioCapture::ProcessAudioData - Empty data: audioData=" + std::string(audioData ? "valid" : "null") + ", numFrames=" + std::to_string(numFrames));
+        }
         return;
     }
 
@@ -233,13 +244,17 @@ void AudioCapture::ProcessAudioData(BYTE* audioData, UINT32 numFrames, DWORD fla
     UINT32 bytesPerFrame = currentFormat.channels * (currentFormat.bitsPerSample / 8);
     UINT32 totalBytes = numFrames * bytesPerFrame;
 
+    AUDIO_LOG("AudioCapture", totalBytes, "Frames: " + std::to_string(numFrames) + ", Flags: " + std::to_string(flags));
+
     // Handle silence flag
     if (flags & AUDCLNT_BUFFERFLAGS_SILENT) {
         // Buffer contains silence, we can either skip it or fill with zeros
         audioBuffer.assign(totalBytes, 0);
+        DEBUG_LOG("AudioCapture - Silent buffer detected, filling with zeros");
     } else {
         // Copy audio data to our buffer
         audioBuffer.assign(audioData, audioData + totalBytes);
+        DEBUG_LOG("AudioCapture - Copied " + std::to_string(totalBytes) + " bytes of audio data");
     }
 
     // Update statistics
@@ -247,7 +262,13 @@ void AudioCapture::ProcessAudioData(BYTE* audioData, UINT32 numFrames, DWORD fla
 
     // Call the callback if set
     if (audioCallback) {
+        DEBUG_LOG("AudioCapture calling audio callback with " + std::to_string(audioBuffer.size()) + " bytes");
         audioCallback(audioBuffer, currentFormat);
+    } else {
+        static int noCallbackCount = 0;
+        if (++noCallbackCount <= 5) { // Only warn first 5 times
+            WARN_LOG("AudioCapture - No audio callback set, data not forwarded");
+        }
     }
 }
 

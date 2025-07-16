@@ -1,0 +1,33 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls:*)",
+      "Bash($PSVersionTable)",
+      "Bash(echo $env:OS)",
+      "Bash(cmd /c:*)",
+      "Bash(.verify_setup.bat)",
+      "Bash(verify_setup.bat)",
+      "Bash(cmake:*)",
+      "Bash(rm:*)",
+      "Bash(./TeamsTranscriptionApp.exe)",
+      "Bash(taskkill:*)",
+      "Bash(cl test:*)",
+      "Bash(grep:*)",
+      "Bash(tasklist:*)",
+      "Bash(.quick_build.bat)",
+      "Bash(\"C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\Common7\\Tools\\VsDevCmd.bat\")",
+      "Bash(msbuild:*)",
+      "Bash(start TeamsTranscriptionApp.exe)",
+      "Bash(tail:*)",
+      "Bash(head:*)",
+      "Bash(pkill:*)",
+      "Bash(kill:*)",
+      "Bash(cat:*)",
+      "Bash(timeout:*)",
+      "Bash(./quick_build.bat)",
+      "Bash(start build/output/Debug/TeamsTranscriptionApp.exe)",
+      "Bash(git add:*)"
+    ],
+    "deny": []
+  }
+}

@@ -1,10 +1,13 @@
 #include "ProcessMonitor.h"
+#include "SimpleLogger.h"
 #include <windows.h>
 #include <tlhelp32.h>
 #include <psapi.h>
 #include <iostream>
 #include <algorithm>
 #include <vector>
+#include <io.h>
+#include <fcntl.h>
 
 #pragma comment(lib, "psapi.lib")
 
@@ -12,6 +15,7 @@ ProcessMonitor::ProcessMonitor()
     : isMonitoring(false)
     , teamsProcessId(0)
     , lastMeetingStatus(false)
+    , lastTeamsFound(false)
 {
 }
 
@@ -27,7 +31,7 @@ bool ProcessMonitor::StartMonitoring() {
     isMonitoring.store(true);
     monitoringThread = std::thread(&ProcessMonitor::MonitoringThreadProc, this);
     
-    std::cout << "Process monitoring started" << std::endl;
+    INFO_LOG("ProcessMonitor: Process monitoring started");
     return true;
 }
 
@@ -42,7 +46,7 @@ void ProcessMonitor::StopMonitoring() {
         monitoringThread.join();
     }
 
-    std::cout << "Process monitoring stopped" << std::endl;
+    INFO_LOG("ProcessMonitor: Process monitoring stopped");
 }
 
 bool ProcessMonitor::IsTeamsRunning() const {
@@ -95,37 +99,68 @@ std::vector<ProcessMonitor::ProcessInfo> ProcessMonitor::GetTeamsProcesses() con
 }
 
 void ProcessMonitor::MonitoringThreadProc() {
+    INFO_LOG("ProcessMonitor: Monitoring thread started");
+    
     while (isMonitoring.load()) {
         bool teamsFound = FindTeamsProcesses();
         bool inMeeting = CheckMeetingStatus();
         
+        std::string debugMsg = "ProcessMonitor: Teams found: " + std::string(teamsFound ? "YES" : "NO") + 
+                              ", In meeting: " + std::string(inMeeting ? "YES" : "NO") +
+                              ", Process ID: " + std::to_string(teamsProcessId);
+        DEBUG_LOG(debugMsg);
+        
         // Notify if status changed
-        if (statusCallback && (inMeeting != lastMeetingStatus || teamsFound != (teamsProcessId != 0))) {
+        if (statusCallback && (inMeeting != lastMeetingStatus || teamsFound != lastTeamsFound)) {
             std::string meetingInfo;
             if (inMeeting) {
                 meetingInfo = "Active meeting detected";
+            } else if (teamsFound) {
+                meetingInfo = "Teams detected, not in meeting";
+            } else {
+                meetingInfo = "Teams not detected";
             }
+            std::string statusMsg = "ProcessMonitor: Status changed - calling callback with meeting: " + 
+                                  std::string(inMeeting ? "YES" : "NO") + ", teamsFound: " + 
+                                  std::string(teamsFound ? "YES" : "NO");
+            INFO_LOG(statusMsg);
             statusCallback(inMeeting, meetingInfo);
         }
         
         lastMeetingStatus = inMeeting;
+        lastTeamsFound = teamsFound;
         
         // Sleep for 2 seconds before next check
         std::this_thread::sleep_for(std::chrono::seconds(2));
     }
+    
+    INFO_LOG("ProcessMonitor: Monitoring thread stopped");
 }
 
-bool ProcessMonitor::FindTeamsProcesses() {
+bool ProcessMonitor::FindTeamsProcesses() const {
     teamsProcessId = 0;
     
     auto processes = GetTeamsProcesses();
     
+    std::string foundMsg = "ProcessMonitor: Found " + std::to_string(processes.size()) + " Teams processes";
+    DEBUG_LOG(foundMsg);
+    
+    for (const auto& process : processes) {
+        // Convert wide string to string for logging
+        std::string processNameStr(process.processName.begin(), process.processName.end());
+        std::string processMsg = "ProcessMonitor: Process: " + processNameStr + " (ID: " + std::to_string(process.processId) + ")";
+        DEBUG_LOG(processMsg);
+    }
+    
     if (!processes.empty()) {
         // Use the first Teams process found
         teamsProcessId = processes[0].processId;
+        std::string usingMsg = "ProcessMonitor: Using Teams process ID: " + std::to_string(teamsProcessId);
+        INFO_LOG(usingMsg);
         return true;
     }
     
+    DEBUG_LOG("ProcessMonitor: No Teams processes found");
     return false;
 }
 

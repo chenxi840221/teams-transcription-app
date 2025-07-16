@@ -36,9 +36,10 @@ private:
 
     mutable DWORD teamsProcessId;
     mutable bool lastMeetingStatus;
+    mutable bool lastTeamsFound;
 
     void MonitoringThreadProc();
-    bool FindTeamsProcesses();
+    bool FindTeamsProcesses() const;
     bool CheckMeetingStatus();
     std::wstring GetWindowTitle(HWND hwnd);
     static BOOL CALLBACK EnumWindowsProc(HWND hwnd, LPARAM lParam);

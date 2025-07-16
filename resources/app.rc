@@ -35,3 +35,47 @@ BEGIN
         VALUE "Translation", 0x409, 1200
     END
 END
+
+// Settings Dialog
+IDD_SETTINGS_DIALOG DIALOGEX 0, 0, 400, 350
+STYLE DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "Speech Recognition Settings"
+FONT 8, "MS Shell Dlg", 400, 0, 0x1
+BEGIN
+    // Speech Recognition Group
+    GROUPBOX "Speech Recognition Provider", -1, 10, 10, 380, 120
+    LTEXT "Provider:", IDC_PROVIDER_LABEL, 20, 30, 60, 8
+    COMBOBOX IDC_PROVIDER_COMBO, 90, 28, 200, 100, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    PUSHBUTTON "Test Connection", IDC_TEST_CONNECTION_BUTTON, 300, 27, 80, 14
+    
+    LTEXT "API Key:", IDC_API_KEY_LABEL, 20, 50, 60, 8
+    EDITTEXT IDC_API_KEY_EDIT, 90, 48, 290, 14, ES_AUTOHSCROLL | ES_PASSWORD
+    
+    LTEXT "Region:", IDC_REGION_LABEL, 20, 70, 60, 8
+    EDITTEXT IDC_REGION_EDIT, 90, 68, 100, 14, ES_AUTOHSCROLL
+    
+    LTEXT "Language:", IDC_LANGUAGE_LABEL, 20, 90, 60, 8
+    COMBOBOX IDC_LANGUAGE_COMBO, 90, 88, 200, 100, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    
+    CONTROL "Enable Punctuation", IDC_PUNCTUATION_CHECK, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 20, 110, 120, 10
+    CONTROL "Enable Speaker Diarization", IDC_DIARIZATION_CHECK, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 160, 110, 120, 10
+    
+    // Audio Settings Group
+    GROUPBOX "Audio Settings", -1, 10, 140, 380, 60
+    LTEXT "Audio Quality:", IDC_AUDIO_QUALITY_LABEL, 20, 160, 60, 8
+    COMBOBOX IDC_AUDIO_QUALITY_COMBO, 90, 158, 200, 100, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    
+    CONTROL "Auto-start recording", IDC_AUTO_START_CHECK, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 20, 180, 120, 10
+    
+    // Privacy Settings Group
+    GROUPBOX "Privacy Settings", -1, 10, 210, 380, 40
+    CONTROL "Require consent before recording", IDC_REQUIRE_CONSENT_CHECK, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 20, 230, 200, 10
+    
+    // Help Text
+    GROUPBOX "Help", -1, 10, 260, 380, 60
+    LTEXT "• Windows Speech Recognition: Works offline, no API key required\n• Azure/Google/OpenAI: Requires internet connection and valid API key\n• API keys are stored securely and never shared", -1, 20, 275, 360, 40
+    
+    // Buttons
+    DEFPUSHBUTTON "OK", IDC_SETTINGS_OK, 240, 330, 70, 14
+    PUSHBUTTON "Cancel", IDC_SETTINGS_CANCEL, 320, 330, 70, 14
+END

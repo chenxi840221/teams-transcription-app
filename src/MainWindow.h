@@ -4,12 +4,14 @@
 #include <memory>
 #include <string>
 #include <atomic>
+#include <vector>
 #include <shellapi.h>
+#include "AudioCapture.h"
 
-class AudioCapture;
 class ProcessMonitor;
 class SpeechRecognition;
 class ConfigManager;
+class SettingsDialog;
 
 class MainWindow {
 public:
@@ -27,6 +29,7 @@ private:
     std::unique_ptr<ProcessMonitor> processMonitor;
     std::unique_ptr<SpeechRecognition> speechRecognition;
     std::unique_ptr<ConfigManager> configManager;
+    std::unique_ptr<SettingsDialog> settingsDialog;
 
     std::atomic<bool> isRecording;
     std::atomic<bool> isPaused;
@@ -55,6 +58,7 @@ private:
 
     void ProcessAudioData(const std::vector<BYTE>& audioData, const AudioCapture::AudioFormat& format);
     void UpdateTranscription(const std::string& text, double confidence);
+    void UpdateDebugLog(const std::string& debugInfo);
     void UpdateTeamsStatus(bool isInMeeting, const std::string& meetingInfo);
     void UpdateCaptureStats();
 };

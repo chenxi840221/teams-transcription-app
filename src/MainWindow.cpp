@@ -3,6 +3,8 @@
 #include "ProcessMonitor.h"
 #include "SpeechRecognition.h"
 #include "ConfigManager.h"
+#include "SettingsDialog.h"
+#include "SimpleLogger.h"
 #include "resource.h"
 #include <windows.h>
 #include <commctrl.h>
@@ -25,9 +27,10 @@ enum ControlIds {
     ID_EXPORT_BUTTON = 1005,
     ID_CLEAR_BUTTON = 1006,
     ID_TRANSCRIPTION_EDIT = 1007,
-    ID_STATUS_BAR = 1008,
-    ID_TEAMS_STATUS = 1009,
-    ID_PROGRESS_BAR = 1010
+    ID_DEBUG_LOG_EDIT = 1008,
+    ID_STATUS_BAR = 1009,
+    ID_TEAMS_STATUS = 1010,
+    ID_PROGRESS_BAR = 1011
 };
 
 // System tray
@@ -56,14 +59,14 @@ bool MainWindow::Create(HINSTANCE hInst, int nCmdShow) {
         return false;
     }
 
-    // Create main window
+    // Create main window (increased width for dual panels)
     hwnd = CreateWindowEx(
         WS_EX_APPWINDOW,
         WINDOW_CLASS_NAME,
         L"Teams Audio Transcription",
         WS_OVERLAPPEDWINDOW,
         CW_USEDEFAULT, CW_USEDEFAULT,
-        800, 600,
+        1000, 650,
         nullptr, nullptr, hInstance, this);
 
     if (!hwnd) {
@@ -76,6 +79,16 @@ bool MainWindow::Create(HINSTANCE hInst, int nCmdShow) {
 
     CreateControls();
     SetupSystemTray();
+
+    // Force initial resize to apply dynamic layout
+    RECT clientRect;
+    GetClientRect(hwnd, &clientRect);
+    HandleResize(clientRect.right - clientRect.left, clientRect.bottom - clientRect.top);
+
+    // Add initial debug messages after controls are created
+    UpdateDebugLog("Application initialized successfully");
+    UpdateDebugLog("Audio capture: " + std::string(audioCapture ? "Ready" : "Failed"));
+    UpdateDebugLog("Speech recognition: " + std::string(speechRecognition ? "Ready" : "Failed"));
 
     ShowWindow(hwnd, nCmdShow);
     UpdateWindow(hwnd);
@@ -113,8 +126,24 @@ bool MainWindow::RegisterWindowClass() {
 
 bool MainWindow::InitializeComponents() {
     try {
+        // Initialize debug logger first
+        SimpleLogger::Initialize();
+        INFO_LOG("=== TEAMS TRANSCRIPTION APP STARTING ===");
+        
         configManager = std::make_unique<ConfigManager>();
-        configManager->LoadConfig();
+        bool configLoaded = configManager->LoadConfig();
+        INFO_LOG("Config loaded: " + std::string(configLoaded ? "SUCCESS" : "FAILED"));
+        
+        if (configLoaded) {
+            auto config = configManager->GetConfig();
+            CONFIG_LOG("Provider", std::to_string((int)config.speechConfig.provider));
+            std::string apiKeyStatus = config.speechConfig.apiKey.empty() ? "EMPTY" : "SET (" + std::to_string(config.speechConfig.apiKey.length()) + " chars)";
+            CONFIG_LOG("API Key", apiKeyStatus);
+            CONFIG_LOG("Endpoint", config.speechConfig.endpoint);
+            CONFIG_LOG("Language", config.speechConfig.language);
+        }
+        
+        settingsDialog = std::make_unique<SettingsDialog>(hInstance, hwnd);
 
         audioCapture = std::make_unique<AudioCapture>();
         HRESULT hr = audioCapture->Initialize();
@@ -124,7 +153,14 @@ bool MainWindow::InitializeComponents() {
         }
 
         speechRecognition = std::make_unique<SpeechRecognition>();
-        speechRecognition->Initialize(configManager->GetSpeechConfig());
+        auto speechConfig = configManager->GetSpeechConfig();
+        
+        // Debug output
+        std::cout << "Initializing speech recognition with provider: " << (int)speechConfig.provider << std::endl;
+        std::cout << "Language: " << speechConfig.language << std::endl;
+        
+        bool initResult = speechRecognition->Initialize(speechConfig);
+        std::cout << "Speech recognition initialized: " << (initResult ? "SUCCESS" : "FAILED") << std::endl;
 
         processMonitor = std::make_unique<ProcessMonitor>();
         processMonitor->SetTeamsStatusCallback([this](bool isInMeeting, const std::string& meetingInfo) {
@@ -187,10 +223,15 @@ void MainWindow::CreateControls() {
         WS_VISIBLE | WS_CHILD | PBS_SMOOTH,
         320, 50, 200, 20, hwnd, (HMENU)ID_PROGRESS_BAR, hInstance, nullptr);
 
-    // Main transcription text area
+    // Transcription area (top half) - dynamically resized in HandleResize
     CreateWindow(L"EDIT", L"Transcription will appear here...",
-        WS_VISIBLE | WS_CHILD | WS_VSCROLL | ES_MULTILINE | ES_AUTOVSCROLL | ES_READONLY,
-        10, 80, 760, 450, hwnd, (HMENU)ID_TRANSCRIPTION_EDIT, hInstance, nullptr);
+        WS_VISIBLE | WS_CHILD | WS_VSCROLL | WS_BORDER | ES_MULTILINE | ES_AUTOVSCROLL | ES_READONLY,
+        10, 105, 980, 200, hwnd, (HMENU)ID_TRANSCRIPTION_EDIT, hInstance, nullptr);
+        
+    // Debug log area (bottom half) - dynamically resized in HandleResize  
+    CreateWindow(L"EDIT", L"Debug information will appear here...",
+        WS_VISIBLE | WS_CHILD | WS_VSCROLL | WS_BORDER | ES_MULTILINE | ES_AUTOVSCROLL | ES_READONLY,
+        10, 370, 980, 200, hwnd, (HMENU)ID_DEBUG_LOG_EDIT, hInstance, nullptr);
 
     // Status bar
     CreateWindow(STATUSCLASSNAME, L"Ready",
@@ -336,14 +377,29 @@ void MainWindow::HandleResize(int width, int height) {
         SendMessage(statusBar, WM_SIZE, 0, 0);
     }
 
-    // Resize transcription edit control
-    HWND editControl = GetDlgItem(hwnd, ID_TRANSCRIPTION_EDIT);
-    if (editControl) {
-        RECT statusRect;
-        GetWindowRect(statusBar, &statusRect);
-        int statusHeight = statusRect.bottom - statusRect.top;
-        
-        SetWindowPos(editControl, nullptr, 10, 80, width - 40, height - 120 - statusHeight, 
+    // Calculate available content area
+    RECT statusRect;
+    GetWindowRect(statusBar, &statusRect);
+    int statusHeight = statusRect.bottom - statusRect.top;
+    int availableHeight = height - 120 - statusHeight; // Total content height
+    int halfHeight = availableHeight / 2; // Half height for each section
+    
+    // Resize transcription edit control (TOP HALF)
+    HWND transcriptionControl = GetDlgItem(hwnd, ID_TRANSCRIPTION_EDIT);
+    if (transcriptionControl) {
+        SetWindowPos(transcriptionControl, nullptr, 10, 105, width - 20, halfHeight - 30, 
+                    SWP_NOZORDER);
+    }
+    
+    // Position separator line (MIDDLE)
+    int separatorY = 105 + halfHeight - 20;
+    // Note: Separator will be repositioned in CreateControls, this is for reference
+    
+    // Resize debug log edit control (BOTTOM HALF)
+    HWND debugLogControl = GetDlgItem(hwnd, ID_DEBUG_LOG_EDIT);
+    if (debugLogControl) {
+        int debugY = 105 + halfHeight + 10; // Start after transcription + separator space
+        SetWindowPos(debugLogControl, nullptr, 10, debugY, width - 20, halfHeight - 30, 
                     SWP_NOZORDER);
     }
 }
@@ -375,6 +431,9 @@ void MainWindow::StartRecording() {
             EnableWindow(GetDlgItem(hwnd, ID_PAUSE_BUTTON), TRUE);
 
             SetWindowText(GetDlgItem(hwnd, ID_STATUS_BAR), L"Recording...");
+            
+            // Add GUI debug message
+            UpdateDebugLog("Audio capture started successfully - listening for audio");
 
             // Start process monitoring
             if (processMonitor) {
@@ -425,7 +484,26 @@ void MainWindow::TogglePause() {
 }
 
 void MainWindow::ShowSettingsDialog() {
-    MessageBox(hwnd, L"Settings dialog not implemented yet", L"Settings", MB_OK | MB_ICONINFORMATION);
+    if (settingsDialog && configManager) {
+        if (settingsDialog->ShowDialog(configManager.get())) {
+            // Settings were changed, reinitialize speech recognition
+            auto speechConfig = configManager->GetSpeechConfig();
+            
+            std::cout << "Settings changed, reinitializing speech recognition..." << std::endl;
+            std::cout << "New provider: " << (int)speechConfig.provider << std::endl;
+            
+            if (speechRecognition) {
+                speechRecognition->Initialize(speechConfig);
+                
+                // Re-set the callback
+                speechRecognition->SetTranscriptionCallback([this](const std::string& text, double confidence) {
+                    UpdateTranscription(text, confidence);
+                });
+            }
+        }
+    } else {
+        MessageBox(hwnd, L"Settings dialog not available", L"Settings", MB_OK | MB_ICONWARNING);
+    }
 }
 
 void MainWindow::ExportTranscription() {
@@ -434,6 +512,7 @@ void MainWindow::ExportTranscription() {
 
 void MainWindow::ClearTranscription() {
     SetWindowText(GetDlgItem(hwnd, ID_TRANSCRIPTION_EDIT), L"");
+    SetWindowText(GetDlgItem(hwnd, ID_DEBUG_LOG_EDIT), L"");
 }
 
 void MainWindow::AutoSaveTranscription() {
@@ -441,55 +520,143 @@ void MainWindow::AutoSaveTranscription() {
 }
 
 void MainWindow::ProcessAudioData(const std::vector<BYTE>& audioData, const AudioCapture::AudioFormat& format) {
+    static int audioCallCount = 0;
+    audioCallCount++;
+    
+    // Log detailed audio information
+    AUDIO_LOG("MainWindow", audioData.size(), 
+              "Rate: " + std::to_string(format.sampleRate) + "Hz, " +
+              "Channels: " + std::to_string(format.channels) + ", " +
+              "Bits: " + std::to_string(format.bitsPerSample));
+    
+    if (audioCallCount % 100 == 0) { // Log summary every 100th call
+        INFO_LOG("ProcessAudioData called " + std::to_string(audioCallCount) + " times, latest size: " + std::to_string(audioData.size()) + " bytes");
+    }
+    
+    // Log audio samples for debugging (every 50th call to avoid spam)
+    if (audioCallCount % 50 == 0) {
+        DEBUG_LOG("Audio sample #" + std::to_string(audioCallCount) + " - " + std::to_string(audioData.size()) + " bytes");
+    }
+    
     if (isPaused.load() || !speechRecognition) {
+        if (audioCallCount % 100 == 0) {
+            WARN_LOG("Audio processing skipped - paused: " + std::string(isPaused.load() ? "true" : "false") + 
+                    ", speechRecognition: " + (speechRecognition ? "valid" : "null"));
+        }
         return;
     }
 
+    DEBUG_LOG("Forwarding audio to speech recognition, size: " + std::to_string(audioData.size()));
+    
     // Forward audio data to speech recognition
     speechRecognition->ProcessAudioData(audioData, format);
 }
 
 void MainWindow::UpdateTranscription(const std::string& text, double confidence) {
+    INFO_LOG("UpdateTranscription called with text: '" + text + "', confidence: " + std::to_string(confidence));
+    
     if (text.empty()) {
+        WARN_LOG("UpdateTranscription received empty text, skipping");
         return;
     }
+
+    // Check if this is a demo/debug message - filter these out
+    if ((text.find("Azure OpenAI GPT-4o transcription #") != std::string::npos &&
+         text.find("Processed") != std::string::npos &&
+         text.find("bytes of WAV audio") != std::string::npos) ||
+        (text.find("Demo transcription #") != std::string::npos &&
+         text.find("Audio detected") != std::string::npos)) {
+        // This is debug info, send to debug log instead
+        UpdateDebugLog("Demo/Debug message filtered: " + text);
+        INFO_LOG("TRANSCRIPTION FILTER: Demo message filtered and sent to debug log");
+        return;
+    }
+
+    INFO_LOG("TRANSCRIPTION: Adding to main panel: '" + text + "'");
 
     // Convert to wide string for Windows controls
     int len = MultiByteToWideChar(CP_UTF8, 0, text.c_str(), -1, nullptr, 0);
     std::wstring wText(len, L'\0');
     MultiByteToWideChar(CP_UTF8, 0, text.c_str(), -1, &wText[0], len);
 
-    // Append to transcription edit control
+    // Append to transcription edit control (clean transcription only)
     HWND editControl = GetDlgItem(hwnd, ID_TRANSCRIPTION_EDIT);
     if (editControl) {
         // Get current text length and move cursor to end
         int textLength = GetWindowTextLength(editControl);
         SendMessage(editControl, EM_SETSEL, textLength, textLength);
         
-        // Add timestamp and text
-        std::wstring timestampedText = L"[" + std::to_wstring(GetTickCount() / 1000) + L"s] " + wText + L"\r\n";
-        SendMessage(editControl, EM_REPLACESEL, FALSE, (LPARAM)timestampedText.c_str());
+        // Add text without timestamp for clean transcription
+        std::wstring cleanText = wText + L"\r\n";
+        SendMessage(editControl, EM_REPLACESEL, FALSE, (LPARAM)cleanText.c_str());
         
         // Scroll to bottom
         SendMessage(editControl, EM_SCROLLCARET, 0, 0);
+        
+        INFO_LOG("Transcription added to UI successfully");
+    } else {
+        ERROR_LOG("Failed to get transcription edit control handle");
+    }
+}
+
+void MainWindow::UpdateDebugLog(const std::string& debugInfo) {
+    if (debugInfo.empty()) {
+        return;
+    }
+
+    // Convert to wide string for Windows controls
+    int len = MultiByteToWideChar(CP_UTF8, 0, debugInfo.c_str(), -1, nullptr, 0);
+    std::wstring wText(len, L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, debugInfo.c_str(), -1, &wText[0], len);
+
+    // Append to debug log edit control
+    HWND debugControl = GetDlgItem(hwnd, ID_DEBUG_LOG_EDIT);
+    if (debugControl) {
+        // Get current text length and move cursor to end
+        int textLength = GetWindowTextLength(debugControl);
+        SendMessage(debugControl, EM_SETSEL, textLength, textLength);
+        
+        // Add timestamp and debug info
+        std::wstring timestampedText = L"[" + std::to_wstring(GetTickCount() / 1000) + L"s] " + wText + L"\r\n";
+        SendMessage(debugControl, EM_REPLACESEL, FALSE, (LPARAM)timestampedText.c_str());
+        
+        // Scroll to bottom
+        SendMessage(debugControl, EM_SCROLLCARET, 0, 0);
     }
 }
 
 void MainWindow::UpdateTeamsStatus(bool isInMeeting, const std::string& meetingInfo) {
+    std::string updateMsg = "MainWindow: UpdateTeamsStatus called - isInMeeting: " + 
+                          std::string(isInMeeting ? "YES" : "NO") + 
+                          ", meetingInfo: " + meetingInfo;
+    INFO_LOG(updateMsg);
+    
     std::wstring status = L"Teams Status: ";
     if (isInMeeting) {
         status += L"In Meeting";
-        if (!meetingInfo.empty()) {
-            int len = MultiByteToWideChar(CP_UTF8, 0, meetingInfo.c_str(), -1, nullptr, 0);
-            std::wstring wMeetingInfo(len, L'\0');
-            MultiByteToWideChar(CP_UTF8, 0, meetingInfo.c_str(), -1, &wMeetingInfo[0], len);
-            status += L" - " + wMeetingInfo;
-        }
+    } else if (meetingInfo.find("Teams detected") != std::string::npos) {
+        status += L"Connected (Not in Meeting)";
     } else {
-        status += L"Not in Meeting";
+        status += L"Not Connected";
     }
-
-    SetWindowText(GetDlgItem(hwnd, ID_TEAMS_STATUS), status.c_str());
+    
+    if (!meetingInfo.empty()) {
+        int len = MultiByteToWideChar(CP_UTF8, 0, meetingInfo.c_str(), -1, nullptr, 0);
+        std::wstring wMeetingInfo(len, L'\0');
+        MultiByteToWideChar(CP_UTF8, 0, meetingInfo.c_str(), -1, &wMeetingInfo[0], len);
+        // Only show detailed info for debugging, not in UI
+    }
+    
+    HWND teamsStatusControl = GetDlgItem(hwnd, ID_TEAMS_STATUS);
+    if (teamsStatusControl) {
+        SetWindowText(teamsStatusControl, status.c_str());
+        // Convert wide string to string for logging
+        std::string statusStr(status.begin(), status.end());
+        std::string successMsg = "MainWindow: Teams status updated to: " + statusStr;
+        INFO_LOG(successMsg);
+    } else {
+        ERROR_LOG("MainWindow: ERROR - Teams status control not found!");
+    }
 }
 
 void MainWindow::UpdateCaptureStats() {
