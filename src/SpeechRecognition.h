@@ -6,6 +6,27 @@
 #include <memory>
 #include <vector>
 
+// Audio conversion utilities
+class AudioConverter {
+public:
+    // Convert audio format for optimal Azure OpenAI processing
+    static std::vector<BYTE> ConvertAudioFormat(
+        const std::vector<BYTE>& inputData,
+        const AudioCapture::AudioFormat& inputFormat,
+        AudioCapture::AudioFormat& outputFormat
+    );
+    
+private:
+    // Convert 32-bit float to 16-bit PCM
+    static std::vector<int16_t> ConvertFloatToPCM16(const float* floatData, size_t sampleCount);
+    
+    // Downsample audio data
+    static std::vector<int16_t> Downsample(const std::vector<int16_t>& input, int inputRate, int outputRate, int channels);
+    
+    // Convert stereo to mono
+    static std::vector<int16_t> StereoToMono(const std::vector<int16_t>& stereoData);
+};
+
 class SpeechRecognition {
 public:
     enum class Provider {

@@ -8,11 +8,13 @@
 #include "resource.h"
 #include <windows.h>
 #include <commctrl.h>
+#include <commdlg.h>
 #include <shellapi.h>
 #include <iostream>
 #include <sstream>
 
 #pragma comment(lib, "shell32.lib")
+#pragma comment(lib, "comdlg32.lib")
 
 const wchar_t* WINDOW_CLASS_NAME = L"TeamsTranscriptionMainWindow";
 const int TIMER_UPDATE_STATS = 1;
@@ -408,6 +410,13 @@ void MainWindow::StartRecording() {
     if (isRecording.load()) {
         return;
     }
+    
+    // Clear audio buffer when starting new recording
+    {
+        std::lock_guard<std::mutex> lock(audioBufferMutex);
+        recordedAudioBuffer.clear();
+        INFO_LOG("MainWindow: Audio buffer cleared for new recording");
+    }
 
     // Check for consent if required
     if (configManager && configManager->GetConfig().requireConsent) {
@@ -507,7 +516,62 @@ void MainWindow::ShowSettingsDialog() {
 }
 
 void MainWindow::ExportTranscription() {
-    MessageBox(hwnd, L"Export functionality not implemented yet", L"Export", MB_OK | MB_ICONINFORMATION);
+    // Create save dialog for transcription
+    OPENFILENAME ofn = {};
+    wchar_t szFile[260] = L"transcription.txt";
+    
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = hwnd;
+    ofn.lpstrFile = szFile;
+    ofn.nMaxFile = sizeof(szFile) / sizeof(wchar_t);
+    ofn.lpstrFilter = L"Text Files\0*.txt\0All Files\0*.*\0";
+    ofn.nFilterIndex = 1;
+    ofn.lpstrFileTitle = NULL;
+    ofn.nMaxFileTitle = 0;
+    ofn.lpstrInitialDir = NULL;
+    ofn.Flags = OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT;
+    
+    if (GetSaveFileName(&ofn)) {
+        // Get transcription text from the edit control
+        HWND hTranscriptionEdit = GetDlgItem(hwnd, ID_TRANSCRIPTION_EDIT);
+        int textLength = GetWindowTextLength(hTranscriptionEdit);
+        
+        if (textLength > 0) {
+            std::wstring transcriptionText(textLength + 1, L'\0');
+            GetWindowText(hTranscriptionEdit, &transcriptionText[0], textLength + 1);
+            transcriptionText.resize(textLength); // Remove null terminator
+            
+            // Save to file
+            HANDLE hFile = CreateFile(szFile, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+            if (hFile != INVALID_HANDLE_VALUE) {
+                // Convert to UTF-8 for better compatibility
+                int utf8Size = WideCharToMultiByte(CP_UTF8, 0, transcriptionText.c_str(), -1, NULL, 0, NULL, NULL);
+                std::string utf8Text(utf8Size, '\0');
+                WideCharToMultiByte(CP_UTF8, 0, transcriptionText.c_str(), -1, &utf8Text[0], utf8Size, NULL, NULL);
+                
+                DWORD bytesWritten;
+                WriteFile(hFile, utf8Text.c_str(), utf8Text.length() - 1, &bytesWritten, NULL); // -1 to exclude null terminator
+                CloseHandle(hFile);
+                
+                std::wstring message = L"Transcription exported successfully to:\n" + std::wstring(szFile);
+                MessageBox(hwnd, message.c_str(), L"Export Successful", MB_OK | MB_ICONINFORMATION);
+                INFO_LOG("Transcription exported to: " + std::string(szFile, szFile + wcslen(szFile)));
+            } else {
+                MessageBox(hwnd, L"Failed to create export file", L"Export Error", MB_OK | MB_ICONERROR);
+                ERROR_LOG("Failed to create export file");
+            }
+        } else {
+            MessageBox(hwnd, L"No transcription to export", L"Export", MB_OK | MB_ICONWARNING);
+        }
+    }
+    
+    // Also offer to export audio if available
+    if (!recordedAudioBuffer.empty()) {
+        int result = MessageBox(hwnd, L"Would you also like to export the recorded audio?", L"Export Audio", MB_YESNO | MB_ICONQUESTION);
+        if (result == IDYES) {
+            ExportAudioBuffer();
+        }
+    }
 }
 
 void MainWindow::ClearTranscription() {
@@ -522,6 +586,23 @@ void MainWindow::AutoSaveTranscription() {
 void MainWindow::ProcessAudioData(const std::vector<BYTE>& audioData, const AudioCapture::AudioFormat& format) {
     static int audioCallCount = 0;
     audioCallCount++;
+    
+    // Store audio format for export
+    audioFormat = format;
+    
+    // Store audio data for export (limit buffer size to avoid memory issues)
+    {
+        std::lock_guard<std::mutex> lock(audioBufferMutex);
+        recordedAudioBuffer.insert(recordedAudioBuffer.end(), audioData.begin(), audioData.end());
+        
+        // Limit buffer to ~30 seconds of audio to avoid memory issues
+        size_t maxBufferSize = format.sampleRate * format.channels * (format.bitsPerSample / 8) * 30;
+        if (recordedAudioBuffer.size() > maxBufferSize) {
+            // Keep only the last 30 seconds
+            recordedAudioBuffer.erase(recordedAudioBuffer.begin(), 
+                recordedAudioBuffer.begin() + (recordedAudioBuffer.size() - maxBufferSize));
+        }
+    }
     
     // Log detailed audio information
     AUDIO_LOG("MainWindow", audioData.size(), 
@@ -671,4 +752,72 @@ void MainWindow::UpdateCaptureStats() {
                << L"Time: " << static_cast<int>(stats.captureTimeSeconds) << L"s";
 
     SetWindowText(GetDlgItem(hwnd, ID_STATUS_BAR), statusText.str().c_str());
+}
+
+void MainWindow::ExportAudioBuffer() {
+    // Create save dialog for audio
+    OPENFILENAME ofn = {};
+    wchar_t szFile[260] = L"recorded_audio.wav";
+    
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = hwnd;
+    ofn.lpstrFile = szFile;
+    ofn.nMaxFile = sizeof(szFile) / sizeof(wchar_t);
+    ofn.lpstrFilter = L"WAV Files\0*.wav\0All Files\0*.*\0";
+    ofn.nFilterIndex = 1;
+    ofn.lpstrFileTitle = NULL;
+    ofn.nMaxFileTitle = 0;
+    ofn.lpstrInitialDir = NULL;
+    ofn.Flags = OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT;
+    
+    if (GetSaveFileName(&ofn)) {
+        std::lock_guard<std::mutex> lock(audioBufferMutex);
+        
+        if (!recordedAudioBuffer.empty()) {
+            // Create WAV file
+            HANDLE hFile = CreateFile(szFile, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+            if (hFile != INVALID_HANDLE_VALUE) {
+                // Write WAV header
+                struct {
+                    char riffHeader[4] = {'R', 'I', 'F', 'F'};
+                    uint32_t fileSize;
+                    char waveHeader[4] = {'W', 'A', 'V', 'E'};
+                    char fmtHeader[4] = {'f', 'm', 't', ' '};
+                    uint32_t fmtSize = 16;
+                    uint16_t audioFormat = 1; // PCM
+                    uint16_t channels;
+                    uint32_t sampleRate;
+                    uint32_t byteRate;
+                    uint16_t blockAlign;
+                    uint16_t bitsPerSample;
+                    char dataHeader[4] = {'d', 'a', 't', 'a'};
+                    uint32_t dataSize;
+                } wavHeader;
+                
+                wavHeader.channels = audioFormat.channels;
+                wavHeader.sampleRate = audioFormat.sampleRate;
+                wavHeader.bitsPerSample = audioFormat.bitsPerSample;
+                wavHeader.blockAlign = wavHeader.channels * (wavHeader.bitsPerSample / 8);
+                wavHeader.byteRate = wavHeader.sampleRate * wavHeader.blockAlign;
+                wavHeader.dataSize = recordedAudioBuffer.size();
+                wavHeader.fileSize = wavHeader.dataSize + sizeof(wavHeader) - 8;
+                
+                DWORD bytesWritten;
+                WriteFile(hFile, &wavHeader, sizeof(wavHeader), &bytesWritten, NULL);
+                WriteFile(hFile, recordedAudioBuffer.data(), recordedAudioBuffer.size(), &bytesWritten, NULL);
+                CloseHandle(hFile);
+                
+                std::wstring message = L"Audio exported successfully to:\n" + std::wstring(szFile) + 
+                                     L"\n\nDuration: " + std::to_wstring(recordedAudioBuffer.size() / (audioFormat.sampleRate * audioFormat.channels * audioFormat.bitsPerSample / 8)) + L" seconds";
+                MessageBox(hwnd, message.c_str(), L"Export Successful", MB_OK | MB_ICONINFORMATION);
+                INFO_LOG("Audio exported to: " + std::string(szFile, szFile + wcslen(szFile)) + 
+                         ", Size: " + std::to_string(recordedAudioBuffer.size()) + " bytes");
+            } else {
+                MessageBox(hwnd, L"Failed to create audio export file", L"Export Error", MB_OK | MB_ICONERROR);
+                ERROR_LOG("Failed to create audio export file");
+            }
+        } else {
+            MessageBox(hwnd, L"No audio data to export", L"Export", MB_OK | MB_ICONWARNING);
+        }
+    }
 }

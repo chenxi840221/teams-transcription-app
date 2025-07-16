@@ -48,7 +48,7 @@ if(WIN32)
         nlohmann_json::nlohmann_json
         kernel32 user32 gdi32 winspool comdlg32 advapi32 shell32
         ole32 oleaut32 uuid odbc32 odbccp32 winmm mmdevapi
-        comctl32 shlwapi
+        comctl32 shlwapi winhttp
     )
 endif()
 

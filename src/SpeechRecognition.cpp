@@ -4,6 +4,91 @@
 #include <sstream>
 #include <thread>
 #include <chrono>
+#include <windows.h>
+#include <winhttp.h>
+#include <vector>
+#include <string>
+
+#pragma comment(lib, "winhttp.lib")
+
+// Audio converter implementation
+std::vector<BYTE> AudioConverter::ConvertAudioFormat(
+    const std::vector<BYTE>& inputData,
+    const AudioCapture::AudioFormat& inputFormat,
+    AudioCapture::AudioFormat& outputFormat
+) {
+    // Set optimal output format for Azure OpenAI
+    outputFormat.sampleRate = 16000;    // 16kHz is optimal for speech recognition
+    outputFormat.channels = 1;          // Mono
+    outputFormat.bitsPerSample = 16;    // 16-bit PCM
+    outputFormat.bytesPerSecond = outputFormat.sampleRate * outputFormat.channels * (outputFormat.bitsPerSample / 8);
+    
+    // Convert 32-bit float input to 16-bit PCM
+    size_t sampleCount = inputData.size() / sizeof(float);
+    const float* floatData = reinterpret_cast<const float*>(inputData.data());
+    std::vector<int16_t> pcmData = ConvertFloatToPCM16(floatData, sampleCount);
+    
+    // Convert stereo to mono if needed
+    if (inputFormat.channels == 2) {
+        pcmData = StereoToMono(pcmData);
+    }
+    
+    // Downsample if needed
+    if (inputFormat.sampleRate != outputFormat.sampleRate) {
+        pcmData = Downsample(pcmData, inputFormat.sampleRate, outputFormat.sampleRate, inputFormat.channels == 2 ? 1 : inputFormat.channels);
+    }
+    
+    // Convert back to BYTE vector
+    std::vector<BYTE> result(pcmData.size() * sizeof(int16_t));
+    memcpy(result.data(), pcmData.data(), result.size());
+    
+    return result;
+}
+
+std::vector<int16_t> AudioConverter::ConvertFloatToPCM16(const float* floatData, size_t sampleCount) {
+    std::vector<int16_t> pcmData(sampleCount);
+    
+    for (size_t i = 0; i < sampleCount; ++i) {
+        // Clamp float to [-1.0, 1.0] range and convert to 16-bit
+        float sample = std::max(-1.0f, std::min(1.0f, floatData[i]));
+        pcmData[i] = static_cast<int16_t>(sample * 32767.0f);
+    }
+    
+    return pcmData;
+}
+
+std::vector<int16_t> AudioConverter::Downsample(const std::vector<int16_t>& input, int inputRate, int outputRate, int channels) {
+    if (inputRate == outputRate) {
+        return input;
+    }
+    
+    // Simple downsampling using decimation
+    float ratio = static_cast<float>(inputRate) / outputRate;
+    size_t outputSamples = static_cast<size_t>(input.size() / ratio);
+    std::vector<int16_t> output(outputSamples);
+    
+    for (size_t i = 0; i < outputSamples; ++i) {
+        size_t inputIndex = static_cast<size_t>(i * ratio);
+        if (inputIndex < input.size()) {
+            output[i] = input[inputIndex];
+        }
+    }
+    
+    return output;
+}
+
+std::vector<int16_t> AudioConverter::StereoToMono(const std::vector<int16_t>& stereoData) {
+    std::vector<int16_t> monoData(stereoData.size() / 2);
+    
+    for (size_t i = 0; i < monoData.size(); ++i) {
+        // Average left and right channels
+        int32_t left = stereoData[i * 2];
+        int32_t right = stereoData[i * 2 + 1];
+        monoData[i] = static_cast<int16_t>((left + right) / 2);
+    }
+    
+    return monoData;
+}
 
 // Abstract interface for speech providers
 class SpeechRecognition::ISpeechProvider {
@@ -215,27 +300,34 @@ public:
         audioBuffer.insert(audioBuffer.end(), audioData.begin(), audioData.end());
         AUDIO_LOG("AzureOpenAISpeechProvider", audioData.size(), "Buffer total: " + std::to_string(audioBuffer.size()));
 
-        // Process every 3 seconds of audio for better transcription
+        // Process every 1 second of audio for lower latency (reduced from 3 seconds)
         auto now = std::chrono::steady_clock::now();
         auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - lastTranscription).count();
         
         size_t bytesPerSecond = format.sampleRate * format.channels * (format.bitsPerSample / 8);
-        size_t threeSecondsOfAudio = bytesPerSecond * 3;
+        size_t oneSecondOfAudio = bytesPerSecond * 1;  // Reduced buffer size for real-time
         
-        DEBUG_LOG("AzureOpenAI - Buffer: " + std::to_string(audioBuffer.size()) + "/" + std::to_string(threeSecondsOfAudio) + " bytes, Elapsed: " + std::to_string(elapsed) + "s");
+        DEBUG_LOG("AzureOpenAI - Buffer: " + std::to_string(audioBuffer.size()) + "/" + std::to_string(oneSecondOfAudio) + " bytes, Elapsed: " + std::to_string(elapsed) + "s");
         
-        if (audioBuffer.size() >= threeSecondsOfAudio && elapsed >= 3) {
+        if (audioBuffer.size() >= oneSecondOfAudio && elapsed >= 1) {
             INFO_LOG("AzureOpenAI processing audio chunk - " + std::to_string(audioBuffer.size()) + " bytes");
             
-            // Convert audio to WAV format for Azure OpenAI
-            std::vector<BYTE> wavData = CreateWavFile(audioBuffer, format);
-            INFO_LOG("Created WAV file: " + std::to_string(wavData.size()) + " bytes");
+            // Convert audio format for optimal Azure OpenAI processing
+            AudioCapture::AudioFormat optimizedFormat;
+            std::vector<BYTE> convertedAudio = AudioConverter::ConvertAudioFormat(audioBuffer, format, optimizedFormat);
+            INFO_LOG("Audio converted: " + std::to_string(audioBuffer.size()) + " -> " + std::to_string(convertedAudio.size()) + " bytes, " +
+                     std::to_string(format.sampleRate) + "Hz -> " + std::to_string(optimizedFormat.sampleRate) + "Hz, " +
+                     std::to_string(format.channels) + "ch -> " + std::to_string(optimizedFormat.channels) + "ch");
+            
+            // Create WAV file with optimized format
+            std::vector<BYTE> wavData = CreateWavFile(convertedAudio, optimizedFormat);
+            INFO_LOG("Created optimized WAV file: " + std::to_string(wavData.size()) + " bytes");
             
             // Log WAV sample for debugging
             static int wavCount = 0;
             DEBUG_LOG("Created WAV sample #" + std::to_string(++wavCount) + " - " + std::to_string(wavData.size()) + " bytes");
             
-            // Send to Azure OpenAI for transcription
+            // Send to Azure OpenAI for transcription (async in future implementation)
             std::string transcriptionText = SendToAzureOpenAI(wavData);
             
             if (!transcriptionText.empty() && callback) {
@@ -301,18 +393,214 @@ private:
     }
     
     std::string SendToAzureOpenAI(const std::vector<BYTE>& wavData) {
-        // Check if we have sufficient audio data (at least 3 seconds of audio)
-        if (wavData.size() < 44100 * 2 * 2 * 3) { // 44.1kHz * 2 channels * 2 bytes per sample * 3 seconds
-            DEBUG_LOG("AzureOpenAI - Insufficient audio data: " + std::to_string(wavData.size()) + " bytes");
+        // Check if we have sufficient audio data (at least 0.5 seconds of audio for real-time)
+        // With optimized format: 16kHz * 1 channel * 2 bytes per sample * 0.5 seconds = 16,000 bytes
+        if (wavData.size() < 16000) {
+            DEBUG_LOG("AzureOpenAI - Insufficient audio data: " + std::to_string(wavData.size()) + " bytes (minimum 16,000 bytes)");
             return ""; // Not enough audio data yet, no transcription
         }
         
         INFO_LOG("AzureOpenAI - Processing " + std::to_string(wavData.size()) + " bytes of audio for transcription");
         
-        // TODO: Real HTTP implementation to Azure OpenAI would go here
-        // For now, return empty to prevent mocked transcription appearing without real audio
-        INFO_LOG("AzureOpenAI - No transcription generated (awaiting real implementation)");
-        return "";
+        try {
+            return SendAudioToAzureOpenAI(wavData);
+        }
+        catch (const std::exception& e) {
+            ERROR_LOG("AzureOpenAI HTTP request failed: " + std::string(e.what()));
+            return "";
+        }
+    }
+    
+private:
+    std::string SendAudioToAzureOpenAI(const std::vector<BYTE>& wavData) {
+        // Parse the endpoint URL
+        std::wstring url = std::wstring(config.endpoint.begin(), config.endpoint.end());
+        
+        // Initialize WinHTTP
+        HINTERNET hSession = WinHttpOpen(L"TeamsTranscriptionApp/1.0",
+                                       WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+                                       WINHTTP_NO_PROXY_NAME,
+                                       WINHTTP_NO_PROXY_BYPASS,
+                                       0);
+        if (!hSession) {
+            throw std::runtime_error("Failed to initialize WinHTTP session");
+        }
+        
+        // Parse URL components
+        URL_COMPONENTS urlComp = {};
+        urlComp.dwStructSize = sizeof(urlComp);
+        wchar_t hostName[256];
+        wchar_t urlPath[1024];
+        urlComp.lpszHostName = hostName;
+        urlComp.dwHostNameLength = sizeof(hostName) / sizeof(wchar_t);
+        urlComp.lpszUrlPath = urlPath;
+        urlComp.dwUrlPathLength = sizeof(urlPath) / sizeof(wchar_t);
+        
+        if (!WinHttpCrackUrl(url.c_str(), 0, 0, &urlComp)) {
+            WinHttpCloseHandle(hSession);
+            throw std::runtime_error("Failed to parse Azure OpenAI URL");
+        }
+        
+        // Connect to server
+        HINTERNET hConnect = WinHttpConnect(hSession, urlComp.lpszHostName, urlComp.nPort, 0);
+        if (!hConnect) {
+            WinHttpCloseHandle(hSession);
+            throw std::runtime_error("Failed to connect to Azure OpenAI server");
+        }
+        
+        // Create request
+        DWORD flags = (urlComp.nScheme == INTERNET_SCHEME_HTTPS) ? WINHTTP_FLAG_SECURE : 0;
+        HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"POST", urlComp.lpszUrlPath,
+                                              NULL, WINHTTP_NO_REFERER,
+                                              WINHTTP_DEFAULT_ACCEPT_TYPES, flags);
+        if (!hRequest) {
+            WinHttpCloseHandle(hConnect);
+            WinHttpCloseHandle(hSession);
+            throw std::runtime_error("Failed to create HTTP request");
+        }
+        
+        // Prepare multipart form data
+        std::string boundary = "----WebKitFormBoundary" + std::to_string(GetTickCount64());
+        std::string contentType = "multipart/form-data; boundary=" + boundary;
+        std::wstring contentTypeW = std::wstring(contentType.begin(), contentType.end());
+        
+        // Set headers
+        std::wstring apiKey = std::wstring(config.apiKey.begin(), config.apiKey.end());
+        std::wstring authHeader = L"api-key: " + apiKey;
+        
+        if (!WinHttpAddRequestHeaders(hRequest, authHeader.c_str(), -1, WINHTTP_ADDREQ_FLAG_ADD) ||
+            !WinHttpAddRequestHeaders(hRequest, contentTypeW.c_str(), -1, WINHTTP_ADDREQ_FLAG_ADD | WINHTTP_ADDREQ_FLAG_REPLACE)) {
+            WinHttpCloseHandle(hRequest);
+            WinHttpCloseHandle(hConnect);
+            WinHttpCloseHandle(hSession);
+            throw std::runtime_error("Failed to set HTTP headers");
+        }
+        
+        // Build multipart body
+        std::vector<BYTE> requestBody = BuildMultipartBody(wavData, boundary);
+        
+        // Send request
+        if (!WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
+                              requestBody.data(), requestBody.size(),
+                              requestBody.size(), 0)) {
+            WinHttpCloseHandle(hRequest);
+            WinHttpCloseHandle(hConnect);
+            WinHttpCloseHandle(hSession);
+            throw std::runtime_error("Failed to send HTTP request");
+        }
+        
+        // Receive response
+        if (!WinHttpReceiveResponse(hRequest, NULL)) {
+            WinHttpCloseHandle(hRequest);
+            WinHttpCloseHandle(hConnect);
+            WinHttpCloseHandle(hSession);
+            throw std::runtime_error("Failed to receive HTTP response");
+        }
+        
+        // Get status code
+        DWORD statusCode = 0;
+        DWORD statusCodeSize = sizeof(statusCode);
+        WinHttpQueryHeaders(hRequest, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+                          NULL, &statusCode, &statusCodeSize, NULL);
+        
+        // Read response body
+        std::string responseData;
+        DWORD bytesAvailable = 0;
+        while (WinHttpQueryDataAvailable(hRequest, &bytesAvailable) && bytesAvailable > 0) {
+            std::vector<char> buffer(bytesAvailable + 1);
+            DWORD bytesRead = 0;
+            if (WinHttpReadData(hRequest, buffer.data(), bytesAvailable, &bytesRead)) {
+                buffer[bytesRead] = '\0';
+                responseData.append(buffer.data(), bytesRead);
+            }
+        }
+        
+        // Cleanup
+        WinHttpCloseHandle(hRequest);
+        WinHttpCloseHandle(hConnect);
+        WinHttpCloseHandle(hSession);
+        
+        // Parse response
+        if (statusCode != 200) {
+            ERROR_LOG("Azure OpenAI API returned status code: " + std::to_string(statusCode) + ", response: " + responseData);
+            return "";
+        }
+        
+        INFO_LOG("Azure OpenAI response: " + responseData);
+        return ParseTranscriptionResponse(responseData);
+    }
+    
+    std::vector<BYTE> BuildMultipartBody(const std::vector<BYTE>& wavData, const std::string& boundary) {
+        std::vector<BYTE> body;
+        
+        // Add file part
+        std::string fileHeader = "--" + boundary + "\r\n";
+        fileHeader += "Content-Disposition: form-data; name=\"file\"; filename=\"audio.wav\"\r\n";
+        fileHeader += "Content-Type: audio/wav\r\n\r\n";
+        
+        body.insert(body.end(), fileHeader.begin(), fileHeader.end());
+        body.insert(body.end(), wavData.begin(), wavData.end());
+        
+        // Add model parameter
+        std::string modelParam = "\r\n--" + boundary + "\r\n";
+        modelParam += "Content-Disposition: form-data; name=\"model\"\r\n\r\n";
+        modelParam += "whisper-1\r\n";
+        
+        body.insert(body.end(), modelParam.begin(), modelParam.end());
+        
+        // Add language parameter
+        std::string langParam = "--" + boundary + "\r\n";
+        langParam += "Content-Disposition: form-data; name=\"language\"\r\n\r\n";
+        langParam += "en\r\n";
+        
+        body.insert(body.end(), langParam.begin(), langParam.end());
+        
+        // Add response format parameter
+        std::string formatParam = "--" + boundary + "\r\n";
+        formatParam += "Content-Disposition: form-data; name=\"response_format\"\r\n\r\n";
+        formatParam += "json\r\n";
+        
+        body.insert(body.end(), formatParam.begin(), formatParam.end());
+        
+        // Close boundary
+        std::string endBoundary = "--" + boundary + "--\r\n";
+        body.insert(body.end(), endBoundary.begin(), endBoundary.end());
+        
+        return body;
+    }
+    
+    std::string ParseTranscriptionResponse(const std::string& jsonResponse) {
+        try {
+            // Simple JSON parsing to extract "text" field
+            size_t textPos = jsonResponse.find("\"text\"");
+            if (textPos == std::string::npos) {
+                WARN_LOG("No 'text' field found in Azure OpenAI response");
+                return "";
+            }
+            
+            size_t colonPos = jsonResponse.find(":", textPos);
+            size_t quoteStart = jsonResponse.find("\"", colonPos);
+            size_t quoteEnd = jsonResponse.find("\"", quoteStart + 1);
+            
+            if (quoteStart == std::string::npos || quoteEnd == std::string::npos) {
+                WARN_LOG("Failed to parse transcription text from response");
+                return "";
+            }
+            
+            std::string transcription = jsonResponse.substr(quoteStart + 1, quoteEnd - quoteStart - 1);
+            
+            // Clean up the transcription (remove extra whitespace, etc.)
+            if (!transcription.empty() && transcription != " ") {
+                INFO_LOG("Successfully parsed transcription: '" + transcription + "'");
+                return transcription;
+            }
+            
+            return "";
+        }
+        catch (const std::exception& e) {
+            ERROR_LOG("Error parsing Azure OpenAI response: " + std::string(e.what()));
+            return "";
+        }
     }
 };
 

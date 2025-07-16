@@ -5,6 +5,7 @@
 #include <string>
 #include <atomic>
 #include <vector>
+#include <mutex>
 #include <shellapi.h>
 #include "AudioCapture.h"
 
@@ -35,6 +36,14 @@ private:
     std::atomic<bool> isPaused;
     
     NOTIFYICONDATA notifyIconData;
+    
+    // Audio buffer for export
+    std::vector<BYTE> recordedAudioBuffer;
+    AudioCapture::AudioFormat audioFormat;
+    std::mutex audioBufferMutex;
+    
+    // Transcription buffer for export
+    std::wstring fullTranscription;
 
     bool RegisterWindowClass();
     bool InitializeComponents();
@@ -55,6 +64,7 @@ private:
     void ExportTranscription();
     void ClearTranscription();
     void AutoSaveTranscription();
+    void ExportAudioBuffer();
 
     void ProcessAudioData(const std::vector<BYTE>& audioData, const AudioCapture::AudioFormat& format);
     void UpdateTranscription(const std::string& text, double confidence);
